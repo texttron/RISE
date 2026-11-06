@@ -30,6 +30,7 @@ scripts/
   build_filename_docid_map.py   map BM25 docids <-> corpus file paths
   summarize_runs.py      aggregate per-query results into a table
   structured/            offline TOC generation (RISE's consequence ii)
+  fineweb_1m/            build the 1M setting (Table 2): 900k FineWeb-Edu distractors
 data/
   queries_100.jsonl      the exact 100-query evaluation set used in the paper
 ```
@@ -58,7 +59,7 @@ built/downloaded once.
    scheme our `gold_doc_ids` index into) and export the documents to a flat file
    tree `corpus/bcp_plus/<domain>/<title>.txt`, plus the merged corpus parquet at
    `corpus/browsecomp_plus.parquet`. (The 1M setting adds 900k FineWeb-Edu
-   distractors; see the paper §3 — same procedure, larger corpus.)
+   distractors; see [Table 2](#table-2-100k--1m-scaling) below.)
 
 3. **BM25 index + docid↔path map.** Build the index once from the corpus:
    ```bash
@@ -129,9 +130,36 @@ upper-bound probe.)
 
 ### Table 2 (100k → 1M scaling)
 
-Same `run_rise.py` / `run_retrieval_agent.py` commands, but point at the 1M
-corpus/index (`--index-dir runs/bm25_full_1m`, `--bc-plus-docs corpus/bcp_plus_1m`,
-`--filename-map runs/corpus_filename_docid_map_1m.json`). At 1M we run RISE-BM25
+**Build the 1M corpus.** The 1M corpus is the 100k BrowseComp-Plus corpus plus
+900,000 FineWeb-Edu distractors. The exact distractor sample used in the paper is
+on the Hub at
+[`Tevatron/browsecomp-plus-fineweb-edu-900k-distractors`](https://huggingface.co/datasets/Tevatron/browsecomp-plus-fineweb-edu-900k-distractors)
+(`docid`/`text`/`url`, docids `fineweb_0` … `fineweb_899999`). After the 100k
+setup (Data steps 2-3):
+
+```bash
+# downloads the 900k sample (sha256-checked), then writes
+#   corpus/browsecomp_plus_1m.parquet          (1,000,195 docs: BCP first, then distractors)
+#   corpus/bcp_plus_1m/                        (BCP tree hardlinked + fineweb/<docid>.txt)
+#   runs/corpus_filename_docid_map_1m.json     (100k map + fineweb/<docid>.txt -> docid)
+python scripts/fineweb_1m/build_1m_corpus.py
+python scripts/build_bm25_index.py \
+    --corpus corpus/browsecomp_plus_1m.parquet --out runs/bm25_full_1m
+```
+
+The distractors were sampled with `scripts/fineweb_1m/sample_fineweb_distractors.py`:
+`HuggingFaceFW/fineweb-edu` config `sample-10BT`, streaming
+`shuffle(seed=42, buffer_size=20000)`, skip texts shorter than 200 characters,
+de-duplicate on the FineWeb-Edu `id`, keep the first 900,000 (`datasets==4.8.5`).
+Streaming shuffle is not guaranteed to be identical across `datasets` versions or
+upstream shard changes, so use the Hub file rather than re-sampling if you want
+to match the paper exactly.
+
+**Run.** Same commands as Table 1, pointed at the 1M corpus/index:
+`run_rise.py` / `run_retrieval_agent.py` with `--index-dir runs/bm25_full_1m
+--bc-plus-docs corpus/bcp_plus_1m --filename-map runs/corpus_filename_docid_map_1m.json`,
+and `run_dci.py` with `--corpus-dir corpus/bcp_plus_1m
+--filename-map runs/corpus_filename_docid_map_1m.json`. At 1M we run RISE-BM25
 (the structured corpus is not extended to the FineWeb distractors) and DCI only
 on `gpt-5.4-nano`.
 
